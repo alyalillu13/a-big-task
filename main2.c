@@ -119,7 +119,7 @@ void find_connected_components(unsigned char* gray_img, int* components, unsigne
                         int ny = cy + dy[i];
                         if(nx >= 0 && nx < width && ny >= 0 && ny < height) {
                             int n_idx = ny * width + nx;
-                            unsigned char n_value = gray_img[n_idx * 4]; // Значение соседа
+                            unsigned char n_value = gray_img[n_idx * 4]; // сосед
                             if(abs(pixel_value - n_value) <= threshold && 
                                 components[n_idx] == -1) {
                                 components[n_idx] = current_component;
