@@ -1,12 +1,17 @@
 #include <stdio.h>
-#include <stdlib.h> 
+#include <stdlib.h>
 #include <strings.h>
-#include <math.h> 
-#include "lodepng.h" 
-
-// принимаем на вход: имя файла, указатели на int для хранения прочитанной ширины и высоты картинки
-// возвращаем указатель на выделенную память для хранения картинки
-// Если память выделить не смогли, отдаем нулевой указатель и пишем сообщение об ошибке
+#include <math.h>
+#include <time.h>
+#include "lodepng.h" //подгрузили
+#include "lodepng.c" //подгрузили
+//взяла функции из вашего кода, единственное что - поменяла тип данных pngsize на size_t, иначе командная строка ругается
+float min(float a, float b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
 unsigned char* load_png(const char* filename, unsigned int* width, unsigned int* height) 
 {
   unsigned char* image = NULL; 
@@ -17,12 +22,10 @@ unsigned char* load_png(const char* filename, unsigned int* width, unsigned int*
   return (image);
 }
 
-// принимаем на вход: имя файла для записи, указатель на массив пикселей,  ширину и высоту картинки
-// Если преобразовать массив в картинку или сохранить не смогли,  пишем сообщение об ошибке
 void write_png(const char* filename, const unsigned char* image, unsigned width, unsigned height)
 {
   unsigned char* png;
-  long unsigned int pngsize;
+  size_t pngsize;
   int error = lodepng_encode32(&png, &pngsize, image, width, height);
   if(error == 0) {
       lodepng_save_file(png, pngsize, filename);
@@ -31,105 +34,175 @@ void write_png(const char* filename, const unsigned char* image, unsigned width,
   }
   free(png);
 }
+//перевожу картинку в чб, luminosity method с сайта https://www.baeldung.com/cs/convert-rgb-to-grayscale
+void rgb_bw(unsigned char *res_grsc, unsigned char *rgb_pic, int width, int height){
+    int i;
+    for(i = 0; i < width*height; i++){
+        res_grsc[4 * i] = 0.3 * rgb_pic[4 * i] + 0.59*rgb_pic[4 * i+1] + 0.11 * rgb_pic[4 * i + 2];
+	    res_grsc[4 * i + 1] = 0.3 * rgb_pic[4 * i] + 0.59*rgb_pic[4 * i+1] + 0.11 * rgb_pic[4 * i + 2];
+	    res_grsc[4 * i + 2] = 0.3 * rgb_pic[4 * i] + 0.59*rgb_pic[4 * i+1] + 0.11 * rgb_pic[4 * i + 2];
+	    res_grsc[4 * i + 3] = 255;
+  }
+  return ;
+}
+// гауссово ядро 5 на 5 для размытия
+const float kernel[5][5] = {
+    {1.0f/273,  4.0f/273,  7.0f/273,  4.0f/273, 1.0f/273},
+    {4.0f/273, 16.0f/273, 26.0f/273, 16.0f/273, 4.0f/273},
+    {7.0f/273, 26.0f/273, 41.0f/273, 26.0f/273, 7.0f/273},
+    {4.0f/273, 16.0f/273, 26.0f/273, 16.0f/273, 4.0f/273},
+    {1.0f/273,  4.0f/273,  7.0f/273,  4.0f/273, 1.0f/273}
+};
 
+void gaussian_blur_5x5(unsigned char* blur, unsigned char* gray, int width, int height) {
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            float sum = 0.0f;
+            for (int ky = -2; ky <= 2; ky++) {
+                for (int kx = -2; kx <= 2; kx++) {
+                    int nx = x + kx;
+                    int ny = y + ky;
+                    if (nx < 0) {
+                        nx = 0;
+                    } 
+                    else {
+                        if (nx >= width) {
+                            nx = width - 1;
+                        }
+                    }
+                    if (ny < 0) {
+                        ny = 0;
+                    } 
+                    else {
+                        if (ny >= height) {
+                            ny = height - 1;
+                        }
+                    }
+                    int index = (ny * width + nx) * 4;
+                    sum += gray[index] * kernel[ky + 2][kx + 2];
+                }
+                int index = (y * width + x) * 4;
+                blur[index] = (unsigned char)min(255, sum);
+                blur[index + 1] = (unsigned char)min(255, sum);
+                blur[index + 2] = (unsigned char)min(255, sum);
+                blur[index + 3] = 255; //не троагем, как был так и остается
+            }
+        }
+    }
+}
+//поиск компонент с помощью bfs
+void find_connected_components(unsigned char* gray_img, int* components, unsigned width, unsigned height, int threshold, int min_component_size) {
+    memset(components, -1, width * height * sizeof(int)); //метки для каждой компоненты
+    int current_component = 0;
+    int* queue_x = malloc(width * height * sizeof(int));
+    int* queue_y = malloc(width * height * sizeof(int));
+    for(unsigned y = 0; y < height; y++) {
+        for(unsigned x = 0; x < width; x++) {
+            int idx = y * width + x;
+            unsigned char pixel_value = gray_img[idx * 4];
+            if(pixel_value < 20) {
+                components[idx] = -3;
+            }
+            if(components[idx] == -1) {
+                int queue_start = 0, queue_end = 1;
+                queue_x[0] = x;
+                queue_y[0] = y;
+                components[idx] = current_component;
+                while(queue_start < queue_end) {
+                    int cx = queue_x[queue_start];
+                    int cy = queue_y[queue_start];
+                    queue_start++;
+                    int dx[4] = {1, -1, 0, 0}; //вдохновилась тем как делала обход в задаче "химия"
+                    int dy[4] = {0, 0, 1, -1};
+                    for(int i = 0; i < 4; i++) {
+                        int nx = cx + dx[i];
+                        int ny = cy + dy[i];
+                        if(nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                            int n_idx = ny * width + nx;
+                            unsigned char n_value = gray_img[n_idx * 4]; // сосед
+                            if(abs(pixel_value - n_value) <= threshold && 
+                                components[n_idx] == -1) {
+                                components[n_idx] = current_component;
+                                queue_x[queue_end] = nx;
+                                queue_y[queue_end] = ny;
+                                queue_end++;
+                            }
+                        }
+                    }
+                }
+                if(queue_end < min_component_size) {
+                    for(int i = 0; i < queue_end; i++) {
+                        components[queue_y[i] * width + queue_x[i]] = -2; //помечаем как шум
+                    }
+                } 
+                else {
+                    current_component++;
+                }
+            }
+        }
+    }
+    free(queue_x);
+    free(queue_y);
+}
 
-// вариант огрубления серого цвета в ЧБ 
-void contrast(unsigned char *col, int bw_size)
-{ 
-    int i; 
-    for(i=0; i < bw_size; i++)
-    {
-        if(col[i] < 55)
-        col[i] = 0; 
-        if(col[i] > 195)
-        col[i] = 255;
-    } 
-    return; 
-} 
-
-// Гауссово размыттие
-void Gauss_blur(unsigned char *col, unsigned char *blr_pic, int width, int height)
-{ 
-    int i, j; 
-    for(i=1; i < height-1; i++) 
-        for(j=1; j < width-1; j++)
-        { 
-            blr_pic[width*i+j] = 0.084*col[width*i+j] + 0.084*col[width*(i+1)+j] + 0.084*col[width*(i-1)+j]; 
-            blr_pic[width*i+j] = blr_pic[width*i+j] + 0.084*col[width*i+(j+1)] + 0.084*col[width*i+(j-1)]; 
-            blr_pic[width*i+j] = blr_pic[width*i+j] + 0.063*col[width*(i+1)+(j+1)] + 0.063*col[width*(i+1)+(j-1)]; 
-            blr_pic[width*i+j] = blr_pic[width*i+j] + 0.063*col[width*(i-1)+(j+1)] + 0.063*col[width*(i-1)+(j-1)]; 
+void color(int* components, unsigned char* finish, unsigned width, unsigned height) {
+    const unsigned char palette[][4] = {
+        {255, 179, 186, 255}, 
+        {255, 223, 186, 255}, 
+        {255, 255, 186, 255}, 
+        {186, 255, 201, 255}, 
+        {186, 225, 255, 255}, 
+        {225, 186, 255, 255}
+    };
+    int palette_size = sizeof(palette) / (4 * sizeof(unsigned char));
+    for(unsigned i = 0; i < width * height; i++) {
+        int idx = i * 4;
+        if(components[i] == -3) {
+            finish[idx] = finish[idx+1] = finish[idx+2] = 0;
+            finish[idx+3] = 255;
         } 
-   return; 
-} 
+        else {
+            if(components[i] == -2) {
+                finish[idx] = finish[idx+1] = finish[idx+2] = 0;
+                finish[idx+3] = 255;
+            } 
+            else {
+                if(components[i] >= 0) {
+                    int color_idx = components[i] % palette_size;
+                    memcpy(&finish[idx], palette[color_idx], 4);
+                }
+            }
+        }
+    }
+}
 
-//  Место для экспериментов
-void color(unsigned char *blr_pic, unsigned char *res, int size)
-{ 
-  int i;
-    for(i=1;i<size;i++) 
-    { 
-        res[i*4]=40+blr_pic[i]+0.35*blr_pic[i-1]; 
-        res[i*4+1]=65+blr_pic[i]; 
-        res[i*4+2]=170+blr_pic[i]; 
-        res[i*4+3]=255; 
-    } 
-    return; 
-} 
-  
-int main() 
-{ 
-    const char* filename = "skull.png"; 
+
+int main() {
+    const char* filename = "skull.png";
     unsigned int width, height;
-    int size;
-    int bw_size;
-    
-    // Прочитали картинку
-    unsigned char* picture = load_png("skull.png", &width, &height); 
-    if (picture == NULL)
-    { 
-        printf("Problem reading picture from the file %s. Error.\n", filename); 
-        return -1; 
-    } 
-
-    size = width * height * 4;
-    bw_size = width * height;
-    
-    
-    unsigned char* bw_pic = (unsigned char*)malloc(bw_size*sizeof(unsigned char)); 
-    unsigned char* blr_pic = (unsigned char*)malloc(bw_size*sizeof(unsigned char)); 
-    unsigned char* finish = (unsigned char*)malloc(size*sizeof(unsigned char)); 
- 
-    // Например, поиграли с  контрастом
-    contrast(bw_pic, bw_size); 
-        // посмотрим на промежуточные картинки
-    write_png("contrast.png", finish, width, height);
-    
-    // поиграли с Гауссом
-    Gauss_blur(bw_pic, blr_pic, width, height); 
-    // посмотрим на промежуточные картинки
-    write_png("gauss.png", finish, width, height);
-    
-    // сделали еще что-нибудь
-    // .....
-    // ....
-    // ....
-    // ....
-    // ....
-    // ....
-    // ....
-    //
-    
-    write_png("intermediate_result.png", finish, width, height);
-    color(blr_pic, finish, bw_size); 
-    
-    // выписали результат
-    write_png("picture_out.png", finish, width, height); 
-    
-    // не забыли почистить память!
-    free(bw_pic); 
-    free(blr_pic); 
-    free(finish); 
-    free(picture); 
-    
-    return 0; 
+    unsigned char* pic = load_png("skull.png", &width, &height);
+    if (pic == NULL) {
+        printf("Problem reading picture from the file %s. Error.\n", filename);
+        return -1;
+    }
+    int size = 4*width*height;
+    unsigned char* gray = (unsigned char*) malloc(size*sizeof(unsigned char));
+    unsigned char* blur = (unsigned char*) malloc(size*sizeof(unsigned char));
+    unsigned char* finish = (unsigned char*) malloc(size*sizeof(unsigned char));
+    rgb_bw(gray, pic, width, height); //переводим в чб 
+    write_png("grayscale1.png", gray, width, height); //результат перевода в чб, если всмотреться, то картинка светлее, чем исходная
+    gaussian_blur_5x5(blur, gray, width, height);  //подразмыли изображение с помощью ядра 5 на 5
+    write_png("blur1.png", blur, width, height);
+    int* components = malloc(width * height * sizeof(int));
+    int threshold = 30; //порог различия яркостей
+    int min_size = 50; // минимальный размер компоненты связности
+    find_connected_components(blur, components, width, height, threshold, min_size);
+    color(components, finish, width, height);
+    write_png("finish1.png", finish, width, height);
+    free(gray);
+    free(blur);
+    free(finish);
+    free(pic);
+    return 0;
+} 0; 
 }
